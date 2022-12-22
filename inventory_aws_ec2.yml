@@ -1,0 +1,10 @@
+plugin: aws_ec2
+regions:
+  - "us-east-1"
+filters:
+  tag:stack: ansible_project
+keyed_groups:
+  - key: tags.Name    # terraformda bu şekilde taglendi. her bir makine için ayrı isim(ansible_control vs.)
+  - key: tags.environment # terraform tagi, 3 worker node için kullanıcaz(development)
+compose:
+  ansible_host: public_ip_address

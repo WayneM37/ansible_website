@@ -1,0 +1,111 @@
+- name: postgresql   # isim verdik. 
+  hosts: _ansible_postgresql     #  db için açacağımız inctance ansible-inventory --graph yaptık baktık
+  become: yes     #sudo yetkisi verdik
+  vars_files:  # postgressql şifresi vault şekilde 
+    - secret.yml
+  tasks:    # taskler     
+    - name: update packages # redhot instanceı update ediyourz
+      yum:    # yum modulunüne documantaiton dan baktık required ları aldık.
+        name: "*" # doc. göre, yıldız ismi ile update edilebilir.
+        state: latest # update için doc. required
+
+# docker kuracağız gerekli regurementlar https://docs.docker.com/engine/install/centos/
+    - name: uninstall old docker version # best practice
+      yum:
+        name: "{{ item }}" # loop kullanıcaz. 
+        state: removed
+      loop:    # docu. den alınan remove için gerekli dosyalar
+        - docker
+        - docker-client
+        - docker-client-latest
+        - docker-common
+        - docker-latest
+        - docker-latest-logrotate
+        - docker-logrotate
+        - docker-engine
+# şimdi docker kurucaz     
+    - name: install yum-utils      
+      yum: 
+        name: yum-utils
+        state: latest
+    
+    - name: add docker repo
+      get_url:   # repodan çekmek için kullnılan module
+        url: https://download.docker.com/linux/centos/docker-ce.repo
+        dest: /etc/yum.repos.d/docker-ce.repo 
+    
+    - name: install docker
+      package: # yum da olur.
+        name: docker-ce
+        state: latest
+# docker image modulu ile docker image pull-build vs yapıyoruz. 
+# önce modulün çalışması için pip ve pip ile de docker sdk kuruyoruz.
+    - name: install pip
+      package: 
+        name: python3-pip
+        state: present
+
+    - name: install docker sdk
+      pip:
+        name: docker
+# docker için gerekli düzenlemeri yapıyoruz.    
+#usermod -a -G docker ec2-user
+    - name: add ec2-user to docker group
+      user: 
+        name: ec2-user
+        groups: docker
+        append: yes
+# dockeri start enable 
+    - name: start docker service
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+# postgresql içinde klasor dizini oluşturup image ı oluşturucaz
+    - name: create build directory
+      file:   # dizin oluşturma modulu
+        path: /home/ec2-user/postgresql
+        state: directory  # bunun bir klasor olduğunu ifade ediyoruz. 
+        owner: root  # bunlar required değil. 
+        group: root
+        mode: "0755"
+
+# init.sql i ve docker filei control node dan al ve postgres node içinde dest. copy et. 
+    - name: copy the sql script
+      copy: 
+        src: /home/ec2-user/ansible/ansible-project/postgres/init.sql
+        dest: /home/ec2-user/postgresql
+# 
+    - name: copy the dockerfile
+      copy: 
+        src: /home/ec2-user/ansible/ansible-project/postgres/Dockerfile
+        dest: /home/ec2-user/postgresql 
+# image oluşturuyoruz. önce her çalıştırıldığında eski image i silip yeni image kuran module kullanıyoruz. 
+    - name: remove container and image if exist
+      shell: "docker ps -q --filter 'name=wayne_postgre' && docker stop wayne_postgre && docker rm -fv wayne_postgre && docker image rm -f waynecw/postgre || echo 'Not Found'" 
+
+# şimdi image i build ediyoruz. https://docs.ansible.com/ansible/2.9/modules/docker_image_module.html 
+    - name: build container image
+      docker_image:
+        name: waynecw/postgre
+        build:
+          path: /home/ec2-user/postgresql   # dosyaları (dockerfile-init.sql) gönderdiğimiz path
+        source: build
+        state: present
+# şimdi image den container oluşturuyoruz. https://hub.docker.com/_/postgres 
+    - name: create postgresql docker container
+      docker_container:
+        name: wayne_postgre
+        image: waynecw/postgre  # biraz önce oluşturduğumuz image
+        state: started
+        ports:  #postgresql defaulf portu
+          - "5432:5432"
+        env:  # docu. göre requreied
+          POSTGRES_PASSWORD: "{{ password }}" # vault şifresi olmasa şifreyi doğrudan buraya yazıyoruz "Pp123456789"  # proje klasorunden alıyoruz.
+        volumes:
+          - /db-data:/var/lib/postgresql/data # docker engine için kendimiz isim verdik bağlayacağımız yer docu. de var.
+      register: container_info
+# container ın running olup olmadığını debug modulu ile bakıhyoruz.
+    - name: print the container info
+      debug:
+        var: container_info
